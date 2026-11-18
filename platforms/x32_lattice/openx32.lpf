@@ -40,38 +40,38 @@ INPUT_SETUP PORT "aes50b_rmii_rxd_1_in" 1.000000 ns HOLD 6.000000 ns CLKNET "clk
 MAXDELAY NET "clk_50MHz" 10.000000 ns ;
 MAXDELAY NET "CLKOS_0" 10.000000 ns ;
 #
-# ---- AES67 core (instance u_x32/u_core/gen_aes67.0.u_aes67), ported from AES67/FPGA/boards/altera/cyc2/cyc2.sdc ----
+# ---- AES67 core (instance u_x32/u_core/gen_aes67.u_aes67), ported from AES67/FPGA/boards/altera/cyc2/cyc2.sdc ----
 # sys_clk = clk_100MHz, LiteX bridge = clk_50MHz, VCXO/MCLK = PLL_OUT (clk_24_576MHz).
 # CDC between those clocks is already blocked by the clock groups in openx32.sdc.
 #
 # RMII -> MII converter: register-divided 25 MHz MAC clock (cyc2: txclk_i/rxclk_i).
-FREQUENCY NET "u_x32/u_core/gen_aes67.0.u_aes67/soc_top_inst/wb_bridge_top_inst/mii_tx_clock" 25.000000 MHz ;
+FREQUENCY NET "u_x32/u_core/gen_aes67.u_aes67/soc_top_inst/wb_bridge_top_inst/mii_tx_clock" 25.000000 MHz ;
 # sys_clk (100 MHz) <-> MAC clock: only CDC-safe transfers cross here (RX timestamp is
 # written right after SOF and latched at byte 23, SOF toggle goes through a 2-FF synchroniser).
 # The clock groups of openx32.sdc do not cover this register-divided clock.
 # Do NOT block clk_50MHz <-> mii_tx_clock: the RMII<->MII converter transfers are synchronous.
 # (the 100 MHz net is called "CLKOS_0" after synthesis, "clk_100MHz" matches no clock net)
-BLOCK PATH FROM CLKNET "CLKOS_0" TO CLKNET "u_x32/u_core/gen_aes67.0.u_aes67/soc_top_inst/wb_bridge_top_inst/mii_tx_clock" ;
-BLOCK PATH FROM CLKNET "u_x32/u_core/gen_aes67.0.u_aes67/soc_top_inst/wb_bridge_top_inst/mii_tx_clock" TO CLKNET "CLKOS_0" ;
+BLOCK PATH FROM CLKNET "CLKOS_0" TO CLKNET "u_x32/u_core/gen_aes67.u_aes67/soc_top_inst/wb_bridge_top_inst/mii_tx_clock" ;
+BLOCK PATH FROM CLKNET "u_x32/u_core/gen_aes67.u_aes67/soc_top_inst/wb_bridge_top_inst/mii_tx_clock" TO CLKNET "CLKOS_0" ;
 # RMII -> MII converter, RX data into the MAC: mac_mii_rxd/rxdv/rxer only change on the
 # clk_50MHz edge where the divided MII clock FALLS, the MAC samples on its RISING edge
 # (rmii_phy_if.v: "if(mac_mii_rxc)"). Real launch-to-capture distance is 20 ns in both
 # directions; Trace assumes the same edge and reports a false hold violation (clock skew
 # of the register-divided clock).
-BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.0.u_aes67/soc_top_inst/wb_bridge_top_inst/mii_converters_inst/rmiigen.rmii_phy_if_inst/mac_mii_rxd*" ;
-BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.0.u_aes67/soc_top_inst/wb_bridge_top_inst/mii_converters_inst/rmiigen.rmii_phy_if_inst/mac_mii_rxdv" ;
-BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.0.u_aes67/soc_top_inst/wb_bridge_top_inst/mii_converters_inst/rmiigen.rmii_phy_if_inst/mac_mii_rxer" ;
+BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.u_aes67/soc_top_inst/wb_bridge_top_inst/mii_converters_inst/rmiigen.rmii_phy_if_inst/mac_mii_rxd*" ;
+BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.u_aes67/soc_top_inst/wb_bridge_top_inst/mii_converters_inst/rmiigen.rmii_phy_if_inst/mac_mii_rxdv" ;
+BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.u_aes67/soc_top_inst/wb_bridge_top_inst/mii_converters_inst/rmiigen.rmii_phy_if_inst/mac_mii_rxer" ;
 # Media clock multiplier: operand is latched and held for two cycles.
-MULTICYCLE FROM CELL "u_x32/u_core/gen_aes67.0.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/aes67_top_inst/ptp_inst/b2v_wallclock/u_media/media_clock_nsec_latch*" TO CELL "u_x32/u_core/gen_aes67.0.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/aes67_top_inst/ptp_inst/b2v_wallclock/u_media/media_mult_reg*" 2.000000 X ;
+MULTICYCLE FROM CELL "u_x32/u_core/gen_aes67.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/aes67_top_inst/ptp_inst/b2v_wallclock/u_media/media_clock_nsec_latch*" TO CELL "u_x32/u_core/gen_aes67.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/aes67_top_inst/ptp_inst/b2v_wallclock/u_media/media_mult_reg*" 2.000000 X ;
 # Quasi-static LiteX CSRs (written by the host, used in other clock domains).
-BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.0.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/litex_soc_aes67_bridge_inst/aes67_csr_*storage*" ;
-BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.0.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/litex_soc_aes67_bridge_inst/aes67soc_reset_storage*" ;
-BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.0.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/litex_soc_aes67_bridge_inst/eth_buf_tx_len*storage*" ;
-BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.0.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/litex_soc_aes67_bridge_inst/eth_buf_rx_ack*storage*" ;
+BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/litex_soc_aes67_bridge_inst/aes67_csr_*storage*" ;
+BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/litex_soc_aes67_bridge_inst/aes67soc_reset_storage*" ;
+BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/litex_soc_aes67_bridge_inst/eth_buf_tx_len*storage*" ;
+BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/litex_soc_aes67_bridge_inst/eth_buf_rx_ack*storage*" ;
 # Ethernet buffer handshake: synchronised on the receiving side.
-BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.0.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/litex_eth_buffer_bridge_inst/rx_valid_reg" ;
-BLOCK PATH TO CELL "u_x32/u_core/gen_aes67.0.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/litex_soc_aes67_bridge_inst/eth_buf_rx_valid_meta*" ;
-BLOCK PATH TO CELL "u_x32/u_core/gen_aes67.0.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/litex_soc_aes67_bridge_inst/eth_buf_rx_len_latched*" ;
+BLOCK PATH FROM CELL "u_x32/u_core/gen_aes67.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/litex_eth_buffer_bridge_inst/rx_valid_reg" ;
+BLOCK PATH TO CELL "u_x32/u_core/gen_aes67.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/litex_soc_aes67_bridge_inst/eth_buf_rx_valid_meta*" ;
+BLOCK PATH TO CELL "u_x32/u_core/gen_aes67.u_aes67/soc_top_inst/wb_bridge_top_inst/aes67_wb_bridge_inst/litex_soc_aes67_bridge_inst/eth_buf_rx_len_latched*" ;
 # Not ported (do not exist after synthesis here): *speed_o* (RMII speed is a
 # constant), rx_overflow_reg, wallclock ppb_adj_reg, bclk generated clock
 # (Synplify turns it into a clock enable on PLL_OUT_c).

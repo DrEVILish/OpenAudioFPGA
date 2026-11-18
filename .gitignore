@@ -1,6 +1,21 @@
 # ---- output of build.sh ------------------------------------------------------
 /build/
 
+# ---- control SoC generator (litex_soc/generate.py, setup_venv.sh) -----------
+litex_soc/build/**
+litex_soc/.venv/
+__pycache__/
+
+# ---- out-of-tree kernel module builds (driver/) ----------------------------
+driver/**/*.o
+driver/**/*.ko
+driver/**/*.mod
+driver/**/*.mod.c
+driver/**/.*.cmd
+driver/**/Module.symvers
+driver/**/modules.order
+driver/**/.tmp_versions/
+
 # ---- simulation ------------------------------------------------------------
 sim/build/
 *.cf

@@ -4,7 +4,7 @@ use ieee.std_logic_1164.all;
 entity x32_lattice is
 	generic (
 		G_AES50_PORTS	: natural range 0 to 2 := 1;
-		G_AES67_PORTS	: natural range 0 to 2 := 1
+		G_AES67			: boolean := true				-- AES67 core on the port after the AES50 cores
 	);
 	port (
 		fpgaclk					: in  std_logic;	-- 16 MHz
@@ -18,8 +18,8 @@ entity x32_lattice is
 		PLL_CDATA				: out std_logic;
 
 		-- i.MX25
-		SPI_nCS0				: in  std_logic;
-		SPI_nCS1				: in  std_logic;
+		SPI_nCS0				: in  std_logic;	-- control bus (SPIBone)
+		SPI_nCS1				: in  std_logic;	-- not used (was: AES67 registers, now on the control bus)
 		SPI_CLK					: in  std_logic;
 		SPI_MOSI				: in  std_logic;
 		SPI_MISO				: out std_logic;
@@ -237,8 +237,8 @@ begin
 	------------------------------------------------------------------------
 	clk_16MHz <= fpgaclk;
 
-	-- 100 MHz system clock of the AES67 cores
-	gen_pll : if G_AES67_PORTS > 0 generate
+	-- 100 MHz system clock of the AES67 core
+	gen_pll : if G_AES67 generate
 		b2v_inst_pll : lattice_pll
 			port map (
 				CLKI => clk_16MHz,
@@ -247,7 +247,7 @@ begin
 				CLKOS => clk_100MHz);
 	end generate;
 
-	gen_no_pll : if G_AES67_PORTS = 0 generate
+	gen_no_pll : if not G_AES67 generate
 		clk_100MHz <= '0';
 	end generate;
 
@@ -358,10 +358,11 @@ begin
 	u_x32 : entity work.x32_common
 		generic map (
 			G_AES50_PORTS => G_AES50_PORTS,
-			G_AES67_PORTS => G_AES67_PORTS,
+			G_AES67 => G_AES67,
 			G_EXT_TDM_LINES => 0,
 			G_AUX_CS42438 => false,
-			G_AES50_SUPPORT_44K1 => false)
+			G_AES50_SUPPORT_44K1 => false,
+			G_PLATFORM_ID => 1)
 		port map (
 			clk_16m_i => clk_16MHz,
 			clk_50m_i => clk_50MHz,
@@ -378,13 +379,9 @@ begin
 			clk_fs256_o => clk_12_288MHz,
 			fsync_o => tdm_fs,
 			spi_ncs_i => SPI_nCS0,
-			spi_ncs1_i => SPI_nCS1,
 			spi_clk_i => SPI_CLK,
 			spi_mosi_i => SPI_MOSI,
 			spi_miso_o => SPI_MISO,
-			cfg_wr_en_o => open,
-			cfg_wr_addr_o => open,
-			cfg_wr_data_o => open,
 			cfg_bits_o => open,
 			uart3_txd_i => imx25_uart3_txd,
 			uart3_rxd_o => imx25_uart3_rxd,

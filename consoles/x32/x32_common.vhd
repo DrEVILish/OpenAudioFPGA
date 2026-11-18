@@ -5,13 +5,14 @@ use ieee.numeric_std.all;
 entity x32_common is
 	generic (
 		G_AES50_PORTS			: natural range 0 to 2 := 1;	-- AES50 cores
-		G_AES67_PORTS			: natural range 0 to 2 := 0;	-- AES67 cores (G_AES50_PORTS + G_AES67_PORTS <= 2)
+		G_AES67					: boolean := false;				-- AES67 core on the port after the AES50 cores
 		G_EXT_TDM_LINES			: natural := 0;					-- additional TDM lines for the top level
 		-- AUX converters: true = CS42438 codec (boards with the Spartan-3A),
 		--                 false = M8000 ADC + PCM1690 DAC (boards with the ECP5)
 		G_AUX_CS42438			: boolean := false;
 		G_AES50_SUPPORT_44K1	: boolean := false;
-		G_AES50_SIM_ASSM_SAMPLES	: natural := 2048
+		G_AES50_SIM_ASSM_SAMPLES	: natural := 2048;
+		G_PLATFORM_ID			: natural range 0 to 255 := 0	-- CSR core_info: 1 = Lattice, 2 = Spartan
 	);
 	port (
 		-- clocks and resets
@@ -34,16 +35,13 @@ entity x32_common is
 		clk_fs256_o			: out std_logic;	-- 12.288 MHz
 		fsync_o				: out std_logic;	-- 48 kHz
 
-		-- SPI
+		-- control bus of the i.MX25 (SPI3 CS0, after the FPGA configuration): SPIBone ->
+		-- Wishbone, register map in rtl/core/openaudio_core.vhd and litex_soc/build/*/csr.csv
 		spi_ncs_i			: in  std_logic;
-		spi_ncs1_i			: in  std_logic := '1';
 		spi_clk_i			: in  std_logic;
 		spi_mosi_i			: in  std_logic;
 		spi_miso_o			: out std_logic;
-		cfg_wr_en_o			: out std_logic;
-		cfg_wr_addr_o		: out std_logic_vector(7 downto 0);
-		cfg_wr_data_o		: out std_logic_vector(7 downto 0);
-		cfg_bits_o			: out std_logic_vector(7 downto 0);
+		cfg_bits_o			: out std_logic_vector(7 downto 0);	-- CSR core_config (clk_50m_i domain)
 
 		-- UART of the IO boards (i.MX25 UART3)
 		uart3_txd_i			: in  std_logic;
@@ -121,7 +119,16 @@ end entity x32_common;
 architecture rtl of x32_common is
 	constant C_BASE_LINES	: natural := 14;	-- converters, card, AUX and DSP
 	constant C_AES67_LINE	: natural := C_BASE_LINES + 6 * G_AES50_PORTS;
-	constant C_EXT_LINE		: natural := C_AES67_LINE + 4 * G_AES67_PORTS;
+	constant C_AES67_PORT	: natural := G_AES50_PORTS;			-- network port of the AES67 core
+
+	function f_aes67_lines return natural is
+	begin
+		if G_AES67 then
+			return 4;
+		end if;
+		return 0;
+	end function;
+	constant C_EXT_LINE		: natural := C_AES67_LINE + f_aes67_lines;
 	constant C_LINES		: natural := C_EXT_LINE + G_EXT_TDM_LINES;
 
 	-- AES50 system mode of every core: "10"
@@ -138,7 +145,7 @@ architecture rtl of x32_common is
 	-- x2 from the 24.576 MHz of the AES67 core
 	function f_pll_ratio return std_logic_vector is
 	begin
-		if G_AES67_PORTS > 0 then
+		if G_AES67 then
 			return x"00200000";
 		else
 			return x"003126E9";
@@ -160,14 +167,11 @@ architecture rtl of x32_common is
 	signal c50_clk_b_tx_en	: std_logic_vector(G_AES50_PORTS - 1 downto 0);
 	signal c50_uart_rx		: std_logic_vector(G_AES50_PORTS - 1 downto 0);
 	signal c50_uart_tx		: std_logic_vector(G_AES50_PORTS - 1 downto 0);
-	signal c67_rmii_crs_dv	: std_logic_vector(G_AES67_PORTS - 1 downto 0);
-	signal c67_rmii_rxd		: std_logic_vector(2 * G_AES67_PORTS - 1 downto 0);
-	signal c67_rmii_tx_en	: std_logic_vector(G_AES67_PORTS - 1 downto 0);
-	signal c67_rmii_txd		: std_logic_vector(2 * G_AES67_PORTS - 1 downto 0);
-	signal c67_spi_ncs		: std_logic_vector(G_AES67_PORTS - 1 downto 0);
-	signal c67_spi_miso		: std_logic_vector(G_AES67_PORTS - 1 downto 0);
-	signal c67_pll_ref		: std_logic_vector(G_AES67_PORTS - 1 downto 0);
-	signal aes67_miso		: std_logic;
+	signal c67_rmii_crs_dv	: std_logic := '0';
+	signal c67_rmii_rxd		: std_logic_vector(1 downto 0) := "00";
+	signal c67_rmii_tx_en	: std_logic;
+	signal c67_rmii_txd		: std_logic_vector(1 downto 0);
+	signal c67_pll_ref		: std_logic;
 
 	signal pll_rst			: std_logic;
 	signal rst				: std_logic;
@@ -193,7 +197,7 @@ architecture rtl of x32_common is
 	signal p16_a_ch			: t_ultranet_ch;
 	signal p16_b_ch			: t_ultranet_ch;
 begin
-	assert G_AES50_PORTS + G_AES67_PORTS <= 2
+	assert not G_AES67 or G_AES50_PORTS <= 1
 		report "x32_common: the X32 has two network ports" severity failure;
 
 	------------------------------------------------------------------------
@@ -416,8 +420,9 @@ begin
 			G_AES50_UART_FIFO_AW => 11,
 			G_AES50_UART_BAUD => 115200,
 			G_AES50_SIM_ASSM_SAMPLES => G_AES50_SIM_ASSM_SAMPLES,
-			G_AES67_PORTS => G_AES67_PORTS,
-			G_AES67_FIRST_LINE => C_AES67_LINE)
+			G_AES67 => G_AES67,
+			G_AES67_FIRST_LINE => C_AES67_LINE,
+			G_PLATFORM_ID => G_PLATFORM_ID)
 		port map (
 			clk_fs1024_i => pll_out_i,
 			fs_sync_i => '0',
@@ -427,9 +432,7 @@ begin
 			spi_ncs_i => spi_ncs_i,
 			spi_clk_i => spi_clk_i,
 			spi_mosi_i => spi_mosi_i,
-			cfg_wr_en_o => cfg_wr_en_o,
-			cfg_wr_addr_o => cfg_wr_addr_o,
-			cfg_wr_data_o => cfg_wr_data_o,
+			spi_miso_o => spi_miso_o,
 			cfg_bits_o => cfg_bits_o,
 			tdm_i => tdm_in,
 			tdm_o => tdm_out,
@@ -461,8 +464,6 @@ begin
 			aes67_rmii_rxd_i => c67_rmii_rxd,
 			aes67_rmii_tx_en_o => c67_rmii_tx_en,
 			aes67_rmii_txd_o => c67_rmii_txd,
-			aes67_spi_ncs_i => c67_spi_ncs,
-			aes67_spi_miso_o => c67_spi_miso,
 			aes67_irq_o => open,
 			aes67_pll_ref_o => c67_pll_ref);
 
@@ -486,15 +487,15 @@ begin
 			aes50_clk_b_rx_nen_o(p) <= '0';
 		end generate;
 
-		gen_aes67 : if p >= G_AES50_PORTS and p < G_AES50_PORTS + G_AES67_PORTS generate
-			c67_rmii_crs_dv(p - G_AES50_PORTS) <= rmii_crs_dv_i(p);
-			c67_rmii_rxd(2 * (p - G_AES50_PORTS) + 1 downto 2 * (p - G_AES50_PORTS)) <= rmii_rxd_i(2 * p + 1 downto 2 * p);
-			rmii_tx_en_o(p) <= c67_rmii_tx_en(p - G_AES50_PORTS);
-			rmii_txd_o(2 * p + 1 downto 2 * p) <= c67_rmii_txd(2 * (p - G_AES50_PORTS) + 1 downto 2 * (p - G_AES50_PORTS));
+		gen_aes67 : if G_AES67 and p = C_AES67_PORT generate
+			c67_rmii_crs_dv <= rmii_crs_dv_i(p);
+			c67_rmii_rxd <= rmii_rxd_i(2 * p + 1 downto 2 * p);
+			rmii_tx_en_o(p) <= c67_rmii_tx_en;
+			rmii_txd_o(2 * p + 1 downto 2 * p) <= c67_rmii_txd;
 			phy_rst_n_o(p) <= online;
 		end generate;
 
-		gen_unused : if p >= G_AES50_PORTS + G_AES67_PORTS generate
+		gen_unused : if p >= G_AES50_PORTS and not (G_AES67 and p = C_AES67_PORT) generate
 			rmii_tx_en_o(p) <= '0';
 			rmii_txd_o(2 * p + 1 downto 2 * p) <= "00";
 			phy_rst_n_o(p) <= online;
@@ -528,28 +529,14 @@ begin
 		uart4_rxd_o <= '1';
 	end generate;
 
-	gen_aes67_ctrl : for k in 0 to G_AES67_PORTS - 1 generate
-		gen_first : if k = 0 generate
-			c67_spi_ncs(k) <= spi_ncs1_i;
-		end generate;
-		gen_others : if k > 0 generate
-			c67_spi_ncs(k) <= '1';
-		end generate;
+	-- AES67: the core is the clock master (its NCO is the reference of the audio PLL)
+	gen_aes67_clk : if G_AES67 generate
+		pll_in_o <= c67_pll_ref;
 	end generate;
 
-	gen_aes67_clk : if G_AES67_PORTS > 0 generate
-		aes67_miso <= c67_spi_miso(0);
-		pll_in_o <= c67_pll_ref(0);
-	end generate;
-
-	gen_no_aes67_clk : if G_AES67_PORTS = 0 generate
-		aes67_miso <= '0';
+	gen_no_aes67_clk : if not G_AES67 generate
 		pll_in_o <= clk_16m_i;
 	end generate;
-
-	spi_miso_o <= spi_mosi_i when spi_ncs_i = '0' else
-				  aes67_miso when spi_ncs1_i = '0' else
-				  '0';
 
 	clk_fs512_o <= clk_fs512;
 	clk_fs256_o <= clk_fs256;

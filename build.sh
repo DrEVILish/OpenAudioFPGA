@@ -6,8 +6,12 @@
 #   ./build.sh xilinx       X32 with Spartan-3A     (ISE 14.7, runs over SSH in the ISE VM)
 #   ./build.sh all          both, in parallel
 #
+# Before the FPGA builds the control SoC is generated (litex_soc/generate.py -> litex_soc/build/).
+#
 # Environment:
 #
+#   LITEX_PYTHON      Python with LiteX, default: litex_soc/.venv/bin/python
+#                     (create it once with litex_soc/setup_venv.sh)
 #   DIAMOND_DIR       Lattice Diamond installation, e.g. ~/lscc/diamond/3.14
 #
 #   ISE_VM_HOST       host name or IP address of the ISE VM
@@ -16,6 +20,8 @@
 #   ISE_VM_PASSWORD   optional, default: xilinx (the password of the official ISE VM);
 #                     SSH keys are tried first
 #   ISE_VM_SETTINGS   optional, default: /opt/Xilinx/14.7/ISE_DS/settings64.sh
+#   ISE_VM_AES67_DIR  optional: path of the AES67 checkout inside the VM, if ext/AES67
+#                     (symlink) does not resolve there; only needed with G_AES67
 #
 # Results (bit files, reports, logs) are collected in build/.
 
@@ -32,6 +38,17 @@ usage() {
 die() {
 	echo "build.sh: $*" >&2
 	exit 1
+}
+
+# ---------------------------------------------------------------------------
+# control SoC (LiteX, Verilog for both families)
+# ---------------------------------------------------------------------------
+generate_soc() {
+	local py="${LITEX_PYTHON:-$ROOT/litex_soc/.venv/bin/python}"
+	[ -x "$py" ] || die "no Python with LiteX at $py (run litex_soc/setup_venv.sh or set LITEX_PYTHON)"
+	echo "LiteX:   generating the control SoC (log: build/litex_soc.log) ..."
+	"$py" "$ROOT/litex_soc/generate.py" --family all >"$OUT/litex_soc.log" 2>&1 \
+		|| { tail -20 "$OUT/litex_soc.log"; die "litex_soc/generate.py failed"; }
 }
 
 # ---------------------------------------------------------------------------
@@ -84,7 +101,9 @@ build_xilinx() {
 	local settings="${ISE_VM_SETTINGS:-/opt/Xilinx/14.7/ISE_DS/settings64.sh}"
 	# a leading ~ is the home directory in the VM
 	local dir="${ISE_VM_REPO/#\~/\$HOME}/platforms/x32_spartan"
-	vm "source \"$settings\" >/dev/null && cd \"$dir\" && rm -rf build && xtclsh create_project.tcl build" \
+	local aes67_env=""
+	[ -n "${ISE_VM_AES67_DIR:-}" ] && aes67_env="AES67_DIR=\"${ISE_VM_AES67_DIR/#\~/\$HOME}\" "
+	vm "source \"$settings\" >/dev/null && cd \"$dir\" && rm -rf build && ${aes67_env}xtclsh create_project.tcl build" \
 		>"$OUT/x32_spartan.log" 2>&1
 	local rc=$?
 	# ISE reports success in the log, xtclsh does not return it
@@ -243,6 +262,7 @@ esac
 [ $do_xilinx -eq 1 ] && check_xilinx
 
 mkdir -p "$OUT"
+generate_soc
 
 if [ $do_xilinx -eq 1 ]; then
 	# SSH asks this helper for the password (it is read from the environment, not stored)

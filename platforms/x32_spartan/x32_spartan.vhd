@@ -21,11 +21,10 @@
 -- What runs on the two RMII ports is a matter of the generics of
 -- consoles/x32/x32_common.vhd.
 --
--- AES67 (G_AES67_PORTS > 0): build the project with
--- "xtclsh create_project.tcl build aes67", which adds the AES67 sources
--- (ext/AES67) and sets the generic. This board has no second SPI chip select
--- at the FPGA (SPI_nCS1 of the ECP5 board), so the registers of the AES67 core
--- cannot be reached from the i.MX25 yet.
+-- AES67 (G_AES67): create_project.tcl reads the default below and adds the
+-- AES67 sources (ext/AES67) exactly when it is true; its arguments aes67 /
+-- noaes67 override it. The registers of the AES67 core are on the
+-- control bus (SPI_nCS0, 0x90000000), like everything else.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -35,7 +34,7 @@ use unisim.vcomponents.all;
 entity x32_spartan is
 	generic (
 		G_AES50_PORTS	: natural range 0 to 2 := 1;
-		G_AES67_PORTS	: natural range 0 to 2 := 0
+		G_AES67			: boolean := true				-- AES67 core on the port after the AES50 cores
 	);
 	port (
 		FPGACLK					: in  std_logic;	-- 16 MHz
@@ -49,7 +48,8 @@ entity x32_spartan is
 		PLL_CDATA				: out std_logic;
 
 		-- i.MX25
-		SPI_nCS0				: in  std_logic;
+		SPI_nCS0				: in  std_logic;	-- control bus (SPIBone), R15 = IO_L02P_1/LDC1 (FPGA_SS0)
+		SPI_nCS1				: in  std_logic;	-- not used, P15 = IO_L02N_1/LDC0 (FPGA_SS1)
 		SPI_CLK					: in  std_logic;
 		SPI_MOSI				: in  std_logic;
 		SPI_MISO				: out std_logic;
@@ -229,8 +229,8 @@ begin
 			CLK0_OUT => open,
 			LOCKED_OUT => open);
 
-	-- 100 MHz system clock of the AES67 cores
-	gen_dcm100 : if G_AES67_PORTS > 0 generate
+	-- 100 MHz system clock of the AES67 core
+	gen_dcm100 : if G_AES67 generate
 		u_dcm100 : entity work.dcm1
 			port map (
 				CLKIN_IN => FPGACLK,
@@ -240,7 +240,7 @@ begin
 				LOCKED_OUT => open);
 	end generate;
 
-	gen_no_dcm100 : if G_AES67_PORTS = 0 generate
+	gen_no_dcm100 : if not G_AES67 generate
 		clk_100MHz <= '0';
 	end generate;
 
@@ -336,10 +336,11 @@ begin
 	u_x32 : entity work.x32_common
 		generic map (
 			G_AES50_PORTS => G_AES50_PORTS,
-			G_AES67_PORTS => G_AES67_PORTS,
+			G_AES67 => G_AES67,
 			G_EXT_TDM_LINES => 0,
 			G_AUX_CS42438 => true,
-			G_AES50_SUPPORT_44K1 => false)
+			G_AES50_SUPPORT_44K1 => false,
+			G_PLATFORM_ID => 2)
 		port map (
 			clk_16m_i => clk_16MHz,
 			clk_50m_i => clk_50MHz,
@@ -356,13 +357,9 @@ begin
 			clk_fs256_o => clk_12_288MHz,
 			fsync_o => tdm_fs,
 			spi_ncs_i => SPI_nCS0,
-			spi_ncs1_i => '1',
 			spi_clk_i => SPI_CLK,
 			spi_mosi_i => SPI_MOSI,
 			spi_miso_o => SPI_MISO,
-			cfg_wr_en_o => open,
-			cfg_wr_addr_o => open,
-			cfg_wr_data_o => open,
 			cfg_bits_o => open,
 			uart3_txd_i => imx25_uart3_txd,
 			uart3_rxd_o => imx25_uart3_rxd,
