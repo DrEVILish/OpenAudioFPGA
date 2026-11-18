@@ -5,13 +5,16 @@
 #   ./build.sh lattice      X32 with Lattice ECP5   (Diamond, runs on this machine)
 #   ./build.sh xilinx       X32 with Spartan-3A     (ISE 14.7, runs over SSH in the ISE VM)
 #   ./build.sh all          both, in parallel
+#   ./build.sh litex        only the LiteX components (register maps), no FPGA build
 #
-# Before the FPGA builds the control SoC is generated (litex_soc/generate.py -> litex_soc/build/).
+# Before the FPGA builds the LiteX components are generated for both families: the
+# register bridge of the AES67 core (ext/AES67/litex_soc/build/aes67_bridge_<family>/,
+# PTP servo and metering without CSRs) and the control SoC (litex_soc/build/).
 #
 # Environment:
 #
 #   LITEX_PYTHON      Python with LiteX, default: litex_soc/.venv/bin/python
-#                     (create it once with litex_soc/setup_venv.sh)
+#                     (created by litex_soc/setup_venv.sh if missing)
 #   DIAMOND_DIR       Lattice Diamond installation, e.g. ~/lscc/diamond/3.14
 #
 #   ISE_VM_HOST       host name or IP address of the ISE VM
@@ -45,7 +48,22 @@ die() {
 # ---------------------------------------------------------------------------
 generate_soc() {
 	local py="${LITEX_PYTHON:-$ROOT/litex_soc/.venv/bin/python}"
-	[ -x "$py" ] || die "no Python with LiteX at $py (run litex_soc/setup_venv.sh or set LITEX_PYTHON)"
+	if [ ! -x "$py" ] && [ -z "${LITEX_PYTHON:-}" ]; then
+		echo "LiteX:   setting up litex_soc/.venv ..."
+		"$ROOT/litex_soc/setup_venv.sh" || die "litex_soc/setup_venv.sh failed"
+	fi
+	[ -x "$py" ] || die "no Python with LiteX at $py"
+
+	local aes67="$ROOT/ext/AES67/litex_soc/generate.py" family
+	[ -f "$aes67" ] || die "AES67 core not found (git submodule update --init ext/AES67)"
+	echo "LiteX:   generating the AES67 register bridge (log: build/aes67_bridge.log) ..."
+	: >"$OUT/aes67_bridge.log"
+	for family in lattice xilinx; do
+		"$py" "$aes67" --target aes67_bridge --family $family --no-servo-csr --no-metering-csr \
+			>>"$OUT/aes67_bridge.log" 2>&1 \
+			|| { tail -20 "$OUT/aes67_bridge.log"; die "AES67 generate.py ($family) failed"; }
+	done
+
 	echo "LiteX:   generating the control SoC (log: build/litex_soc.log) ..."
 	"$py" "$ROOT/litex_soc/generate.py" --family all >"$OUT/litex_soc.log" 2>&1 \
 		|| { tail -20 "$OUT/litex_soc.log"; die "litex_soc/generate.py failed"; }
@@ -255,6 +273,7 @@ case "$1" in
 	lattice) do_lattice=1; do_xilinx=0 ;;
 	xilinx)  do_lattice=0; do_xilinx=1 ;;
 	all|both) do_lattice=1; do_xilinx=1 ;;
+	litex)   mkdir -p "$OUT"; generate_soc; exit 0 ;;
 	*) usage ;;
 esac
 
