@@ -40,7 +40,7 @@ from migen import *
 from migen.fhdl.structure import _Fragment
 from migen.genlib.resetsync import AsyncResetSynchronizer
 from litex.gen import *
-from litex.build.generic_platform import Pins, Subsignal
+from litex.build.generic_platform import GenericPlatform, Pins, Subsignal
 from litex.build.lattice import LatticePlatform
 from litex.build.xilinx import XilinxPlatform
 from litex.soc.integration.soc_core import SoCCore
@@ -128,7 +128,39 @@ class XilinxStub(XilinxPlatform):
         return _stub_build(self, fragment, **kwargs)
 
 
-PLATFORMS = {"lattice": LatticeStub, "xilinx": XilinxStub}
+class WingStub(GenericPlatform):
+    default_clk_name = "clk_sys"
+    default_clk_period = 1e9 / 49.152e6
+
+    def __init__(self):
+        GenericPlatform.__init__(self, "T55F484", _io[:2] + [
+            ("wing", 0,
+                Subsignal("ready", Pins(1)),
+                Subsignal("reset_release", Pins(4))),
+        ])
+
+    def build(self, fragment, **kwargs):
+        return _stub_build(self, fragment, **kwargs)
+
+    def get_verilog(self, fragment, **kwargs):
+        return GenericPlatform.get_verilog(self, fragment,
+            special_overrides={AsyncResetSynchronizer: WingReset}, **kwargs)
+
+
+class WingReset:
+    @staticmethod
+    def lower(special):
+        # CTRL reset is synchronous to sys; preserve power-on reset as in the
+        # other vendor targets, without a vendor-specific flip-flop primitive.
+        m = Module()
+        sync = getattr(m.sync, special.cd.name)
+        stages = Signal(2, reset=3, reset_less=True)
+        sync += stages.eq(Cat(special.async_reset, stages[0]))
+        m.comb += special.cd.rst.eq(stages[1])
+        return m
+
+
+PLATFORMS = {"lattice": LatticeStub, "xilinx": XilinxStub, "wing": WingStub}
 
 
 # -- CSRs ----------------------------------------------------------------------------
@@ -161,6 +193,22 @@ class CoreCSRs(LiteXModule):
         ]
 
 
+class WingCSRs(LiteXModule):
+    def __init__(self, pads, build_id):
+        self.magic = CSRStatus(32, name="magic")
+        self.abi_version = CSRStatus(32, name="abi_version")
+        self.build_id = CSRStatus(32, name="build_id")
+        self.capabilities = CSRStatus(32, name="capabilities")
+        self.status = CSRStatus(32, name="status")
+        self.dsp_reset_release = CSRStorage(4, name="dsp_reset_release")
+        self.comb += [
+            self.magic.status.eq(0x57494E47), self.abi_version.status.eq(0x00020000),
+            self.build_id.status.eq(build_id), self.capabilities.status.eq(0),
+            self.status.status.eq(pads.ready),
+            pads.reset_release.eq(self.dsp_reset_release.storage & 0b1011),
+        ]
+
+
 # -- clock / reset ---------------------------------------------------------------------
 
 class _CRG(LiteXModule):
@@ -190,7 +238,7 @@ def _wire_master_to_pads(soc, iface, pads):
 # -- SoC -----------------------------------------------------------------------------
 
 class OpenAudioSoC(SoCCore):
-    def __init__(self, platform, sys_clk_freq=SYS_CLK_FREQ):
+    def __init__(self, platform, sys_clk_freq=SYS_CLK_FREQ, wing_build_id=None):
         SoCCore.__init__(self, platform, sys_clk_freq,
             cpu_type                 = "None",
             # one master: the shared interconnect, which (unlike the crossbar) has the bus
@@ -216,6 +264,11 @@ class OpenAudioSoC(SoCCore):
         self.spibone = SPIBone(platform.request("spibone"), with_burst=True, with_tristate=False)
         self.bus.add_master(name="spibone", master=self.spibone.bus)
 
+        if wing_build_id is not None:
+            self.csr.add("wing", n=3)
+            self.wing = WingCSRs(platform.request("wing"), wing_build_id)
+            return
+
         self.core = CoreCSRs(platform.request("core"))
 
         for name, origin, size in WB_SLAVES:
@@ -227,9 +280,9 @@ class OpenAudioSoC(SoCCore):
 
 # -- main ----------------------------------------------------------------------------
 
-def build(family, output_dir):
+def build(family, output_dir, wing_build_id=None):
     platform = PLATFORMS[family]()
-    soc = OpenAudioSoC(platform)
+    soc = OpenAudioSoC(platform, 49.152e6 if family == "wing" else SYS_CLK_FREQ, wing_build_id)
     builder = Builder(soc,
         output_dir       = output_dir,
         compile_software = False,
@@ -247,7 +300,7 @@ def main():
     parser.add_argument("--output-dir", default=None, help="output directory (single family only)")
     args = parser.parse_args()
 
-    families = list(PLATFORMS) if args.family == "all" else [args.family]
+    families = ["lattice", "xilinx"] if args.family == "all" else [args.family]
     if args.output_dir and len(families) > 1:
         parser.error("--output-dir needs a single --family")
     for family in families:
