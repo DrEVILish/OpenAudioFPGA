@@ -3,6 +3,7 @@
 """Stage the WING Compact T55 project for Efinity (no programming)."""
 import argparse
 import hashlib
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -16,6 +17,8 @@ from generate import build
 NAME = "wing-fpga"
 DEVICE = "T55F484"
 VERSION = "2026.1.132"
+PROFILE = ROOT / "consoles/wing/profile-tdm16.json"
+PROFILE_SHA256 = "3b29934cdc1c704de69b6b028bc71387ab7c50cb74e811fb35ca0f64664a3e9d"
 HOST = {
     "clk_audio": ("in", "R2", "GPIOL_15"),
     "host_sck": ("in", "W1", "GPIOL_01"), "host_mosi": ("in", "V2", "GPIOL_08"),
@@ -31,7 +34,7 @@ CONTROL = (
 )
 
 
-def emit_top(out):
+def emit_top(out, profile):
     pins = dict(HOST)
     assignments = []
 
@@ -51,6 +54,35 @@ def emit_top(out):
                 pin(f"dsp{i+1}_{signal}", "in" if signal == "dpi_miso" else "out",
                     location.split(":"), "clkin" if signal == "clkin" else f"{signal}({i})")
 
+    used = {"tx": [], "rx": []}
+    owners = {"tx": [], "rx": []}
+    for i, dsp in enumerate(profile["dsp"]):
+        n = dsp["id"]
+        control = [dsp["spi"][key] for key in ("mosi", "miso", "sck", "sel")] + [dsp["clkin"], dsp["reset_n"]]
+        if n != i + 1 or tuple(":".join(loc) if loc else None for loc in control) != CONTROL[i]:
+            raise ValueError(f"DSP{n} profile control pins differ from the board platform")
+        for direction in ("tx", "rx"):  # Directions in the profile are from the DSP's perspective.
+            pin(f"dsp{n}_{direction}_bclk", "out", dsp[f"{direction}_clock"][1:], "bclk")
+            pin(f"dsp{n}_{direction}_fs", "out", dsp[f"{direction}_fs"][1:], f"fs({i})")
+            for lane, (_, ball, resource) in enumerate(dsp[direction]):
+                incoming = direction == "tx"
+                vec = "from_dsp" if incoming else "to_dsp"
+                pin(f"dsp{n}_{direction}_data{lane}", "in" if incoming else "out",
+                    (ball, resource), f"{vec}({len(used[direction])})")
+                slots = min(16, max(0, dsp["slots_used"] - 16 * lane))
+                used[direction].append((dsp["first_id"] + 16 * lane) * 64 + slots if slots else 0)
+                owners[direction].append(i)
+
+    lanes = max(map(len, used.values()))
+
+    def packed(values, width):
+        return '"' + ''.join(f'{n:0{width}b}' for n in reversed(values + [0] * (lanes - len(values)))) + '"'
+
+    descriptors = [packed(values[direction], width)
+                   for values, width in ((used, 15), (owners, 2)) for direction in ("tx", "rx")]
+    for lane in range(len(used["tx"]), lanes):
+        assignments.append(f"    from_dsp({lane}) <= '0';")
+
     ports = []
     for name, (mode, _, _) in pins.items():
         ports.extend(("host_miso_out : out std_logic", "host_miso_oe : out std_logic", "host_miso_in : in std_logic")
@@ -62,12 +94,15 @@ entity wing_fpga is
     port ({'; '.join(ports)});
 end entity;
 architecture rtl of wing_fpga is
-    signal clkin : std_logic;
-    signal dpi_miso, dpi_sel, dpi_sck, dpi_mosi, reset_n : std_logic_vector(3 downto 0);
+    signal clkin, bclk : std_logic;
+    signal dpi_miso, dpi_sel, dpi_sck, dpi_mosi, reset_n, fs : std_logic_vector(3 downto 0);
+    signal from_dsp, to_dsp : std_logic_vector({lanes - 1} downto 0);
 begin
     console : entity work.wing_common
+        generic map ({lanes}, {', '.join(descriptors)})
         port map (clk_audio, host_sck, host_mosi, ctrl_cs_n, dsp_cs_n,
-                  host_miso_out, host_miso_oe, clkin, dpi_miso, dpi_sel, dpi_sck, dpi_mosi, reset_n);
+                  host_miso_out, host_miso_oe, clkin, dpi_miso, dpi_sel, dpi_sck, dpi_mosi, reset_n,
+                  bclk, fs, from_dsp, to_dsp);
 {chr(10).join(assignments)}
 end architecture;
 """)
@@ -136,15 +171,19 @@ def emit_efinity(out, pins, sources):
 
 
 def generate(out):
-    sources = [ROOT / "consoles/wing" / name for name in ("dsp_spi.vhd", "wing_common.vhd")]
+    profile = PROFILE.read_bytes()
+    if hashlib.sha256(profile).hexdigest() != PROFILE_SHA256:
+        raise ValueError("WING profile does not match the shared FPGA/DSP TDM16 contract")
+    sources = [ROOT / "rtl/core/tdm_frame_io.vhd", ROOT / "consoles/wing/dsp_spi.vhd", ROOT / "consoles/wing/wing_common.vhd"]
     sdc = HERE / "wing.sdc"
     digest = hashlib.sha256()
-    for source in [Path(__file__), sdc, *sources,
+    for source in [Path(__file__), PROFILE, sdc, *sources,
                    *(ROOT / "litex_soc" / name for name in ("generate.py", "spi_bone.py", "requirements.txt"))]:
         digest.update(hashlib.sha256(source.read_bytes()).digest())
     out.mkdir(parents=True, exist_ok=False)
     build("wing", str(out), int.from_bytes(digest.digest()[:4], "big"))
-    pins = emit_top(out)
+    pins = emit_top(out, json.loads(profile))
+    (out / "dsp_board_profile.json").write_bytes(profile)
     for source in [*sources, sdc]:
         shutil.copyfile(source, out / source.name)
     names = [source.name for source in sources] + ["wing_fpga.vhd", "gateware/openaudio_soc.v"]

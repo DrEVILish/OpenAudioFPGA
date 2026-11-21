@@ -136,7 +136,12 @@ class WingStub(GenericPlatform):
         GenericPlatform.__init__(self, "T55F484", _io[:2] + [
             ("wing", 0,
                 Subsignal("ready", Pins(1)),
-                Subsignal("reset_release", Pins(4))),
+                Subsignal("reset_release", Pins(4)),
+                Subsignal("audio_enable", Pins(4)),
+                Subsignal("audio_valid", Pins(4)),
+                Subsignal("sport_slot", Pins(9)),
+                Subsignal("sport_send", Pins(32)),
+                Subsignal("sport_return", Pins(32))),
         ])
 
     def build(self, fragment, **kwargs):
@@ -201,11 +206,21 @@ class WingCSRs(LiteXModule):
         self.capabilities = CSRStatus(32, name="capabilities")
         self.status = CSRStatus(32, name="status")
         self.dsp_reset_release = CSRStorage(4, name="dsp_reset_release")
+        self.dsp_audio_enable = CSRStorage(4, name="dsp_audio_enable")
+        self.dsp_audio_valid = CSRStorage(4, name="dsp_audio_valid")
+        self.sport_slot = CSRStorage(9, reset=511, name="sport_slot")
+        self.sport_send = CSRStorage(32, name="sport_send")
+        self.sport_return = CSRStatus(32, name="sport_return")
         self.comb += [
             self.magic.status.eq(0x57494E47), self.abi_version.status.eq(0x00020000),
             self.build_id.status.eq(build_id), self.capabilities.status.eq(0),
             self.status.status.eq(pads.ready),
             pads.reset_release.eq(self.dsp_reset_release.storage & 0b1011),
+            pads.audio_enable.eq(self.dsp_audio_enable.storage),
+            pads.audio_valid.eq(self.dsp_audio_valid.storage),
+            pads.sport_slot.eq(self.sport_slot.storage),
+            pads.sport_send.eq(self.sport_send.storage),
+            self.sport_return.status.eq(pads.sport_return),
         ]
 
 
